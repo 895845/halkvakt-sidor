@@ -1,0 +1,61 @@
+name: sidorna
+# SIDORNA (Bengt 27/10, DECISIONS #733 i Axelstar/Halkvakt): "Axel kan inte just nu. Visa hur sidorna kan publiceras från mitt
+# eget konto i stället." Pages kräver adminrätt i Axelstar/Halkvakt, så sidorna publiceras härifrån: flödet hämtar main i
+# Axelstar/Halkvakt (publikt repo, ingen nyckel behövs), bygger sidorna med samma skript som där och publicerar dem på
+# https://895845.github.io/halkvakt-sidor/. En gång per dygn 05.30 UTC, efter att morgonens dokumentsynk slagits ihop, och
+# med Run workflow när någon vill se en ändring tidigare. Genomsökningen körs i Axelstar/Halkvakt, där ärendet ska stå.
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: [".github/workflows/sidorna.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: sidorna
+  cancel-in-progress: false
+jobs:
+  bygg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.s.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: Axelstar/Halkvakt, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --experimental-strip-types scripts/sidorna.ts --bygg _site
+      - id: s
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: _site }
+  publicera:
+    needs: bygg
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { pages: write, id-token: write }
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
+  stampel:
+    # GitHub stänger av scheman i ett publikt repo efter 60 dagar utan aktivitet. En commit med byggets sha håller schemat vid
+    # liv. Eget jobb, så att Halkvakts skript aldrig körs med skrivrätt till det här repot.
+    needs: [bygg, publicera]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "${{ needs.bygg.outputs.sha }}" > byggd.txt
+          git config user.name sidorna
+          git config user.email 271615319+895845@users.noreply.github.com
+          git add byggd.txt
+          git diff --cached --quiet || { git commit -q -m "Byggd ur Axelstar/Halkvakt $(cut -c1-7 byggd.txt)"; git push -q; }
